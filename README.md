@@ -25,8 +25,8 @@ $$\mathbf{x}_{\text{pert}}^{(k)}(t_0) = \mathbf{x}_0(t_0) + \alpha \sum_{m=1}^M 
 ## 2. Repository Structure
 
 ```text
-norkyst_ensemble/
-├── norkyst_ensemble/               # Core perturbation engine
+roms_ensemble/
+├── roms_ensemble/               # Core perturbation engine
 │   ├── s_coord.py                  # ROMS terrain-following s-coordinate calculations
 │   ├── io.py                       # Memory-efficient NetCDF4 I/O on staggered C-grid
 │   ├── sampler.py                  # Historical snapshot discovery and anomaly extraction
@@ -34,13 +34,9 @@ norkyst_ensemble/
 │   ├── balance.py                  # Land masking, barotropic re-integration, static stability QC
 │   ├── generator.py                # Pipeline orchestrator
 │   └── cli.py                      # Command-line entry point
-├── hpc/                            # HPC orchestration
-│   ├── setup_ensemble_runs.py      # Prepares reference & wind farm variation directories + ocean.in
-│   └── submit_ensemble_slurm.sh    # Slurm array job executing all variations per member
 ├── THEORY.md                       # In-depth theoretical treatise on ocean dynamics & perturbations
 ├── tests/                          # Test suite
-│   ├── test_ensemble.py
-│   └── test_hpc_setup.py
+│   └── test_ensemble.py
 └── pytest.ini
 ```
 
@@ -75,73 +71,6 @@ python -m roms_ensemble.cli \
 This produces:
 - `roms_ini_mem01.nc` through `roms_ini_mem10.nc`
 - Each file has recomputed barotropic velocities ($\bar{u}, \bar{v}$ matching 3D $u, v$ layer integrals), strict land-mask enforcement, and convective stability checks ($N^2 \ge 0$).
-
----
-
-### Step 2: Set Up Simulation Directories (Reference & Farm Variations)
-
-In your setup:
-- The **reference run** uses the standard grid file (`--ref-grid`).
-- The **wind farm runs** use a grid file containing the wind farm presence/locations (`--farm-grid`).
-- Different **variations** of the wind farm parametrization are configured by overriding parameters in `ocean.in`.
-
-#### Option A: Providing variations via CLI:
-```bash
-python hpc/setup_ensemble_runs.py \
-  --work-dir /cluster/work/users/$USER/roms_windfarm_ensemble \
-  --template-ocean-in /path/to/ocean.in \
-  --roms-executable /path/to/romsM \
-  --ini-dir /cluster/work/users/$USER/roms_ini_ensemble \
-  --ref-grid /path/to/roms_ref_grid.nc \
-  --farm-grid /path/to/roms_farm_grid.nc \
-  --members 10 \
-  --variation farm_drag_low Cd_turb=0.05 Mix_scale=1.0 \
-  --variation farm_drag_high Cd_turb=0.15 Mix_scale=2.5
-```
-
-#### Option B: Providing variations via JSON:
-Create `variations.json`:
-```json
-{
-  "farm_drag_low": {
-    "Cd_turb": 0.05,
-    "Mix_scale": 1.0
-  },
-  "farm_drag_high": {
-    "Cd_turb": 0.15,
-    "Mix_scale": 2.5
-  }
-}
-```
-Run:
-```bash
-python hpc/setup_ensemble_runs.py \
-  --work-dir /cluster/work/users/$USER/norkyst_windfarm_ensemble \
-  --template-ocean-in /path/to/ocean.in \
-  --roms-executable /path/to/romsM \
-  --ini-dir /cluster/work/users/$USER/norkyst_ini_ensemble \
-  --ref-grid /path/to/norkyst800_ref_grid.nc \
-  --farm-grid /path/to/norkyst800_farm_grid.nc \
-  --members 10 \
-  --variations-json variations.json
-```
-
-This creates:
-- `reference/mem01/` ... `reference/mem10/` (Uses `ref-grid`)
-- `farm_drag_low/mem01/` ... `farm_drag_low/mem10/` (Uses `farm-grid` + `Cd_turb=0.05`, `Mix_scale=1.0`)
-- `farm_drag_high/mem01/` ... `farm_drag_high/mem10/` (Uses `farm-grid` + `Cd_turb=0.15`, `Mix_scale=2.5`)
-
----
-
-### Step 3: Launch Parallel Simulation via Slurm
-
-Submit the Slurm array job on the cluster:
-
-```bash
-sbatch hpc/submit_ensemble_slurm.sh /cluster/work/users/$USER/norkyst_windfarm_ensemble
-```
-
-Each array task automatically discovers and executes the `reference` run and all configured parametrization variations for that member.
 
 ---
 

@@ -82,7 +82,7 @@ def generate_ensemble(
     # Step 1: Initialize target files by cloning base_file
     member_paths = []
     for k in range(num_members):
-        mem_filename = f"norkyst800_ini_mem{k+1:02d}.nc"
+        mem_filename = f"roms_ini_mem{k+1:02d}.nc"
         mem_path = output_dir / mem_filename
         prepare_target_file(base_file, mem_path, overwrite=True)
         member_paths.append(mem_path)

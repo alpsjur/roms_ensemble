@@ -1,4 +1,4 @@
-"""Package interface for norkyst_ensemble."""
+"""Package interface for roms_ensemble."""
 
 from .generator import generate_ensemble
 from .sampler import HistoricalAnomalySampler

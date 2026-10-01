@@ -1,4 +1,4 @@
-"""Unit and integration tests for the norkyst_ensemble package."""
+"""Unit and integration tests for the roms_ensemble package."""
 
 import tempfile
 from pathlib import Path
@@ -6,16 +6,16 @@ import netCDF4 as nc
 import numpy as np
 import pytest
 
-from norkyst_ensemble.balance import (
+from roms_ensemble.balance import (
     apply_land_masks,
     check_and_adjust_static_stability,
     compute_approx_density,
     recompute_barotropic_velocities,
 )
-from norkyst_ensemble.generator import generate_ensemble
-from norkyst_ensemble.perturbation import EnsemblePerturbationEngine
-from norkyst_ensemble.sampler import HistoricalAnomalySampler
-from norkyst_ensemble.s_coord import compute_stretching, compute_z_levels
+from roms_ensemble.generator import generate_ensemble
+from roms_ensemble.perturbation import EnsemblePerturbationEngine
+from roms_ensemble.sampler import HistoricalAnomalySampler
+from roms_ensemble.s_coord import compute_stretching, compute_z_levels
 
 
 def test_s_coordinate_stretching():
