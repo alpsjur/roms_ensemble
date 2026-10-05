@@ -70,8 +70,11 @@ def recompute_barotropic_velocities(
     Du = np.sum(Hz_u, axis=0)
     Du = np.where(Du > 1e-4, Du, 1.0)
 
-    # Vertical integration: sum(u * Hz_u) / Du
-    ubar = np.sum(u * Hz_u, axis=0) / Du
+    # Vertical integration: sum(u * Hz_u) / Du, computed in-place into Hz_u
+    # to avoid materializing a second full 3D (N, eta, xi) temporary.
+    np.multiply(u, Hz_u, out=Hz_u)
+    ubar = np.sum(Hz_u, axis=0) / Du
+    del Hz_u
 
     # Average Hz to v-points: shape (N, eta_rho - 1, xi_rho)
     Hz_v = 0.5 * (Hz[:, :-1, :] + Hz[:, 1:, :])
@@ -79,8 +82,10 @@ def recompute_barotropic_velocities(
     Dv = np.sum(Hz_v, axis=0)
     Dv = np.where(Dv > 1e-4, Dv, 1.0)
 
-    # Vertical integration: sum(v * Hz_v) / Dv
-    vbar = np.sum(v * Hz_v, axis=0) / Dv
+    # Vertical integration: sum(v * Hz_v) / Dv, computed in-place into Hz_v.
+    np.multiply(v, Hz_v, out=Hz_v)
+    vbar = np.sum(Hz_v, axis=0) / Dv
+    del Hz_v
 
     # Enforce land masks
     ubar = apply_land_masks("ubar", ubar, masks)

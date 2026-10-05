@@ -66,35 +66,29 @@ class EnsemblePerturbationEngine:
             raise IndexError(f"Member index {member_idx} out of range [0, {self.num_members - 1}]")
         return self.weights[member_idx]
 
-    def synthesize_perturbed_variable(
+    def apply_weighted_perturbation(
         self,
         base_state: np.ndarray,
-        anomalies: List[np.ndarray],
-        member_idx: int,
+        weighted_anomaly_sum: np.ndarray,
         var_alpha: Optional[float] = None,
     ) -> np.ndarray:
-        """Synthesize perturbed variable field for member k:
+        """Combine a base state with a precomputed weighted anomaly sum for one member:
 
-        x_pert = x_base + alpha * sum(w_m * x'_m)
+        x_pert = x_base + alpha * weighted_anomaly_sum
+
+        The weighted sum (sum_m w_m * x'_m) is computed upstream by
+        HistoricalAnomalySampler.compute_variable_perturbations, which streams
+        over the historical snapshots instead of holding all M anomalies in
+        memory at once.
 
         Parameters
         ----------
         base_state : np.ndarray
             Base initial condition array.
-        anomalies : List[np.ndarray]
-            List of anomaly arrays (length M).
-        member_idx : int
-            Index of ensemble member (0 to K-1).
+        weighted_anomaly_sum : np.ndarray
+            Precomputed sum_m(w_m * x'_m) for one ensemble member.
         var_alpha : float, optional
             Variable-specific scaling factor override. Defaults to self.alpha.
         """
         scale = var_alpha if var_alpha is not None else self.alpha
-        weights = self.get_member_weights(member_idx)
-
-        # Weighted combination of anomalies
-        perturbation = np.zeros_like(base_state, dtype=np.float32)
-        for w, anom in zip(weights, anomalies):
-            perturbation += (float(w) * anom).astype(np.float32)
-
-        perturbed_field = (base_state + scale * perturbation).astype(base_state.dtype)
-        return perturbed_field
+        return (base_state + scale * weighted_anomaly_sum).astype(base_state.dtype)

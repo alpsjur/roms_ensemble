@@ -1,10 +1,27 @@
 """Command-line interface for generating Norkyst-ROMS ensemble initial condition files."""
 
 import argparse
+import glob
 import logging
 import sys
 from pathlib import Path
 from .generator import generate_ensemble
+
+
+def _expand_snapshot_patterns(patterns):
+    """Expand glob patterns in historical-snapshot paths.
+
+    Needed because schedulers that submit commands in "binary" mode (e.g. SGE
+    `qsub -b y`) run the command without a shell, so wildcards such as
+    `archive/*.nc` are never expanded and arrive as a single literal
+    (non-existent) path. Falls back to the literal path when it contains no
+    wildcard matches, so explicit filenames keep working unchanged.
+    """
+    resolved = []
+    for pattern in patterns:
+        matches = sorted(Path(m) for m in glob.glob(str(pattern)))
+        resolved.extend(matches if matches else [pattern])
+    return resolved
 
 
 def main():
@@ -61,6 +78,7 @@ def main():
     )
 
     args = parser.parse_args()
+    args.historical_snapshots = _expand_snapshot_patterns(args.historical_snapshots)
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(

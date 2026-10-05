@@ -1,6 +1,7 @@
 """Ensemble generation orchestrator for ROMS initial condition files."""
 
 import logging
+import resource
 from pathlib import Path
 from typing import List, Optional, Union
 import numpy as np
@@ -24,6 +25,12 @@ from .sampler import HistoricalAnomalySampler
 from .s_coord import compute_stretching, compute_z_levels
 
 logger = logging.getLogger(__name__)
+
+
+def _log_peak_rss(context: str) -> None:
+    """Log the process's peak resident set size so far (Linux: KB -> GB)."""
+    peak_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    logger.debug(f"Peak RSS so far ({context}): {peak_kb / 1e6:.2f} GB")
 
 
 def generate_ensemble(
@@ -71,7 +78,7 @@ def generate_ensemble(
     grid_source = Path(grid_file) if grid_file else base_file
     grid_metrics = read_grid_metrics(grid_source)
 
-    sampler = HistoricalAnomalySampler(historical_snapshots)
+    sampler = HistoricalAnomalySampler(historical_snapshots, angle=grid_metrics.get("angle"))
     engine = EnsemblePerturbationEngine(
         num_snapshots=sampler.num_snapshots,
         num_members=num_members,
@@ -92,18 +99,21 @@ def generate_ensemble(
     vars_to_perturb = ["u", "v", "temp", "salt", "zeta"]
     for var_name in vars_to_perturb:
         logger.info(f"Processing perturbations for variable: {var_name}")
-        anom_data = sampler.compute_variable_anomalies(var_name)
+        _log_peak_rss(f"before {var_name}")
+        pert_data = sampler.compute_variable_perturbations(var_name, engine.weights)
+        _log_peak_rss(f"after sampling {var_name}")
         base_var = read_variable(base_file, var_name)
 
         for k in range(num_members):
-            pert_field = engine.synthesize_perturbed_variable(
+            pert_field = engine.apply_weighted_perturbation(
                 base_state=base_var,
-                anomalies=anom_data["anomalies"],
-                member_idx=k,
+                weighted_anomaly_sum=pert_data["perturbations"][k],
             )
             # Apply land mask immediately
             pert_field = apply_land_masks(var_name, pert_field, grid_metrics)
             write_variable(member_paths[k], var_name, pert_field)
+        del pert_data, base_var
+        _log_peak_rss(f"after writing {var_name}")
 
     # Step 3: Dynamical balance and physical QC checks for each member
     theta_s = vparams.get("theta_s", 7.0)
@@ -122,6 +132,7 @@ def generate_ensemble(
 
     for k, mem_path in enumerate(member_paths):
         logger.info(f"Applying dynamical balance QC on member {k+1:02d} ({mem_path.name})")
+        _log_peak_rss(f"before QC member {k + 1:02d}")
 
         # Read perturbed fields
         u = read_variable(mem_path, "u")
@@ -131,7 +142,7 @@ def generate_ensemble(
         zeta = read_variable(mem_path, "zeta")
 
         # 3A. Vertical grid levels & layer thicknesses
-        _, _, Hz = compute_z_levels(
+        z_r, z_w, Hz = compute_z_levels(
             h=h,
             zeta=zeta,
             s_rho=s_rho,
@@ -141,11 +152,15 @@ def generate_ensemble(
             hc=hc,
             Vtransform=Vtransform,
         )
+        # z_r/z_w are not needed downstream here; free them immediately
+        # instead of leaving them resident for the rest of the member loop.
+        del z_r, z_w, zeta
 
         # 3B. Recompute barotropic velocities
         ubar, vbar = recompute_barotropic_velocities(u, v, Hz, grid_metrics)
         write_variable(mem_path, "ubar", ubar)
         write_variable(mem_path, "vbar", vbar)
+        del u, v, ubar, vbar, Hz
 
         # 3C. Static stability check on temp & salt
         temp_adj, salt_adj, adj_count = check_and_adjust_static_stability(
@@ -155,6 +170,8 @@ def generate_ensemble(
             logger.info(f"Adjusted {adj_count} statically unstable points in member {k+1:02d}")
             write_variable(mem_path, "temp", temp_adj)
             write_variable(mem_path, "salt", salt_adj)
+        del temp, salt, temp_adj, salt_adj
+        _log_peak_rss(f"after QC member {k + 1:02d}")
 
     logger.info(f"Successfully generated {num_members} ensemble initial condition files in {output_dir}")
     return member_paths
