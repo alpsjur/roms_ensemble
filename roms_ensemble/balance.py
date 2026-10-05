@@ -100,11 +100,16 @@ def compute_approx_density(temp: np.ndarray, salt: np.ndarray) -> np.ndarray:
     t = np.clip(temp, -2.0, 40.0)
     s = np.clip(salt, 0.0, 42.0)
 
+    # t**2 / t**3 via repeated multiplication: NumPy's generic power path is
+    # noticeably slower than multiplication for large arrays.
+    t2 = t * t
+    t3 = t2 * t
+
     # Pure water density
-    rho_pure = 999.842594 + (6.793952e-2 * t) - (9.095290e-3 * t**2) + (1.001685e-4 * t**3)
+    rho_pure = 999.842594 + (6.793952e-2 * t) - (9.095290e-3 * t2) + (1.001685e-4 * t3)
 
     # Salinity contribution
-    rho = rho_pure + s * (0.824493 - 4.0899e-3 * t + 7.6438e-5 * t**2)
+    rho = rho_pure + s * (0.824493 - 4.0899e-3 * t + 7.6438e-5 * t2)
     return rho
 
 
@@ -134,55 +139,82 @@ def check_and_adjust_static_stability(
     t_adj = np.clip(t_adj, -2.5, 35.0)
     s_adj = np.clip(s_adj, 0.0, 42.0)
 
+    if mask_rho is not None:
+        valid_flat = (mask_rho != 0).reshape(-1)
+    else:
+        valid_flat = np.ones(eta * xi, dtype=bool)
+
+    # Flatten the horizontal dims: reshape of a C-contiguous (N, eta, xi) array
+    # is a view, so writes through t_flat/s_flat land directly in t_adj/s_adj.
+    t_flat = t_adj.reshape(N, eta * xi)
+    s_flat = s_adj.reshape(N, eta * xi)
+
     adjustments = 0
 
-    # Column-by-column convective adjustment
-    for j in range(eta):
-        for i in range(xi):
-            if mask_rho is not None and mask_rho[j, i] == 0:
-                continue
+    def column_unstable(t_cols, s_cols):
+        """Boolean mask (one per column) of whether any level pair is inverted."""
+        rho_cols = compute_approx_density(t_cols, s_cols)
+        return np.any(rho_cols[:-1] < rho_cols[1:], axis=0)
 
-            col_t = t_adj[:, j, i]
-            col_s = s_adj[:, j, i]
-            col_rho = compute_approx_density(col_t, col_s)
+    # Restrict all work to the (initially small) subset of columns that
+    # actually contain a density inversion, instead of sweeping the full
+    # (eta, xi) grid on every pass. As columns stabilize they drop out of the
+    # active set, so each successive pass operates on a shrinking array —
+    # this is what makes the vectorized relaxation fast even in pathological
+    # cases with many inversions, instead of paying the full-grid cost
+    # `max_passes` times regardless of how many columns still need work.
+    active_idx = np.where(valid_flat & column_unstable(t_flat, s_flat))[0]
 
-            # Check if any inversion exists in this column
-            if np.any(col_rho[:-1] < col_rho[1:]):
-                stable = False
-                iter_count = 0
-                while not stable and iter_count < N * 3:
-                    stable = True
-                    iter_count += 1
-                    for k in range(N - 1):
-                        rho_k = compute_approx_density(col_t[k], col_s[k])
-                        rho_kp1 = compute_approx_density(col_t[k + 1], col_s[k + 1])
-                        if rho_k < rho_kp1:
-                            stable = False
-                            adjustments += 1
-                            t_m = 0.5 * (col_t[k] + col_t[k + 1])
-                            s_m = 0.5 * (col_s[k] + col_s[k + 1])
-                            col_t[k] = t_m
-                            col_t[k + 1] = t_m
-                            col_s[k] = s_m
-                            col_s[k + 1] = s_m
+    max_passes = 3 * N
+    forward = range(N - 1)
+    backward = range(N - 2, -1, -1)
 
-                            # Backward propagation
-                            b = k
-                            while b > 0:
-                                rho_bm1 = compute_approx_density(col_t[b - 1], col_s[b - 1])
-                                rho_b = compute_approx_density(col_t[b], col_s[b])
-                                if rho_bm1 < rho_b:
-                                    t_back = 0.5 * (col_t[b - 1] + col_t[b])
-                                    s_back = 0.5 * (col_s[b - 1] + col_s[b])
-                                    col_t[b - 1] = t_back
-                                    col_t[b] = t_back
-                                    col_s[b - 1] = s_back
-                                    col_s[b] = s_back
-                                    b -= 1
-                                else:
-                                    break
+    for _ in range(max_passes):
+        if active_idx.size == 0:
+            break
 
-            t_adj[:, j, i] = col_t
-            s_adj[:, j, i] = col_s
+        t_sub = t_flat[:, active_idx]
+        s_sub = s_flat[:, active_idx]
+
+        changed = False
+        for k_range in (forward, backward):
+            rho_cache: Dict[int, np.ndarray] = {}
+
+            def rho_of(k):
+                cached = rho_cache.get(k)
+                if cached is None:
+                    cached = compute_approx_density(t_sub[k], s_sub[k])
+                    rho_cache[k] = cached
+                return cached
+
+            for k in k_range:
+                rho_k = rho_of(k)
+                rho_kp1 = rho_of(k + 1)
+                unstable = rho_k < rho_kp1
+                if not np.any(unstable):
+                    continue
+
+                changed = True
+                adjustments += int(np.count_nonzero(unstable))
+
+                t_m = 0.5 * (t_sub[k] + t_sub[k + 1])
+                s_m = 0.5 * (s_sub[k] + s_sub[k + 1])
+                t_sub[k] = np.where(unstable, t_m, t_sub[k])
+                t_sub[k + 1] = np.where(unstable, t_m, t_sub[k + 1])
+                s_sub[k] = np.where(unstable, s_m, s_sub[k])
+                s_sub[k + 1] = np.where(unstable, s_m, s_sub[k + 1])
+
+                rho_cache.pop(k, None)
+                rho_cache.pop(k + 1, None)
+
+        t_flat[:, active_idx] = t_sub
+        s_flat[:, active_idx] = s_sub
+
+        if not changed:
+            break
+
+        # Shrink the active set to only the columns still unstable.
+        still_unstable = column_unstable(t_sub, s_sub)
+        active_idx = active_idx[still_unstable]
 
     return t_adj.astype(temp.dtype), s_adj.astype(salt.dtype), adjustments
