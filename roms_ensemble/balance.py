@@ -109,17 +109,10 @@ def compute_approx_density(temp: np.ndarray, salt: np.ndarray) -> np.ndarray:
     t2 = t * t
     t3 = t2 * t
 
-    # t**2 / t**3 via repeated multiplication: NumPy's generic power path is
-    # noticeably slower than multiplication for large arrays.
-    t2 = t * t
-    t3 = t2 * t
-
     # Pure water density
-    rho_pure = 999.842594 + (6.793952e-2 * t) - (9.095290e-3 * t2) + (1.001685e-4 * t3)
     rho_pure = 999.842594 + (6.793952e-2 * t) - (9.095290e-3 * t2) + (1.001685e-4 * t3)
 
     # Salinity contribution
-    rho = rho_pure + s * (0.824493 - 4.0899e-3 * t + 7.6438e-5 * t2)
     rho = rho_pure + s * (0.824493 - 4.0899e-3 * t + 7.6438e-5 * t2)
     return rho
 
@@ -149,16 +142,6 @@ def check_and_adjust_static_stability(
     # Physical bounds clipping
     t_adj = np.clip(t_adj, -2.5, 35.0)
     s_adj = np.clip(s_adj, 0.0, 42.0)
-
-    if mask_rho is not None:
-        valid_flat = (mask_rho != 0).reshape(-1)
-    else:
-        valid_flat = np.ones(eta * xi, dtype=bool)
-
-    # Flatten the horizontal dims: reshape of a C-contiguous (N, eta, xi) array
-    # is a view, so writes through t_flat/s_flat land directly in t_adj/s_adj.
-    t_flat = t_adj.reshape(N, eta * xi)
-    s_flat = s_adj.reshape(N, eta * xi)
 
     if mask_rho is not None:
         valid_flat = (mask_rho != 0).reshape(-1)
@@ -246,28 +229,7 @@ def check_and_adjust_static_stability(
 
         if not changed:
             break
-                changed = True
-                adjustments += int(np.count_nonzero(unstable))
 
-                t_m = 0.5 * (t_sub[k] + t_sub[k + 1])
-                s_m = 0.5 * (s_sub[k] + s_sub[k + 1])
-                t_sub[k] = np.where(unstable, t_m, t_sub[k])
-                t_sub[k + 1] = np.where(unstable, t_m, t_sub[k + 1])
-                s_sub[k] = np.where(unstable, s_m, s_sub[k])
-                s_sub[k + 1] = np.where(unstable, s_m, s_sub[k + 1])
-
-                rho_cache.pop(k, None)
-                rho_cache.pop(k + 1, None)
-
-        t_flat[:, active_idx] = t_sub
-        s_flat[:, active_idx] = s_sub
-
-        if not changed:
-            break
-
-        # Shrink the active set to only the columns still unstable.
-        still_unstable = column_unstable(t_sub, s_sub)
-        active_idx = active_idx[still_unstable]
         # Shrink the active set to only the columns still unstable.
         still_unstable = column_unstable(t_sub, s_sub)
         active_idx = active_idx[still_unstable]
