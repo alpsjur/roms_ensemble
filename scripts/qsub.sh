@@ -3,8 +3,8 @@
 #$ -N create_ensemble
 #$ -cwd
 #$ -b y
-#$ -l h_rt=01:00:00
-#$ -l h_rss=1G,mem_free=1G,h_data=1G
+#$ -l h_rt=03:00:00
+#$ -l h_rss=16G,mem_free=16G,h_data=1G
 #$ -S /bin/bash
 #$ -q bigmem-r8.q
 #$ -M ansju8054@met.no
