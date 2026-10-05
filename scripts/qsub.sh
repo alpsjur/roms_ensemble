@@ -23,4 +23,5 @@ python3 -m roms_ensemble.cli \
 --output-dir /lustre/storeB/users/ansju8054/roms-ting/roms_ensemble/files/ensemble \
 --members 10 \
 --alpha 0.10 \
---seed 42
+--seed 42 \
+--verbose
